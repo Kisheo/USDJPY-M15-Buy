@@ -30,3 +30,5 @@ No secrets are stored in this repository. The receiver and both EAs must run on 
 ## Validation
 
 MetaEditor: zero errors, zero warnings. Seven Python tests cover HTTP authentication, validation, duplicates, conflicts, recovery, receipt replay prevention and route isolation, including identical IDs on different routes. Tests use temporary queues and place no trades. Pine compilation in TradingView and an actual TradingView-to-MT5 fill remain unverified.
+
+Installed on this PC: the active receiver in the Codex app-cache runtime was updated and restarted; localhost health and the USDJPY timeframe rejection were verified. The existing tunnel process was left running. USDJPYSignalEA source and compiled binary are installed under the configured terminal's Experts/CodexBridge directory. The EA has not been attached or enabled by this update. The original receiver was backed up in each updated runtime directory.

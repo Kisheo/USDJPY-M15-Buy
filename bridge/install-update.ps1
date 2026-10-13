@@ -14,4 +14,3 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\mt5\USDJPYSignalEA.mq5'),(Jo
 $receivers = Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^python(w)?\.exe$' -and $_.CommandLine -and $_.CommandLine.Contains($target) }
 foreach ($receiver in $receivers) { Stop-Process -Id $receiver.ProcessId -Force }
 Write-Output 'Receiver upgraded and separate EA installed. Existing supervisor will restart the receiver. Tunnel and secrets preserved.'
-
