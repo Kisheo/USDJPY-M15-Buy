@@ -163,7 +163,12 @@ def main():
     usd.recover()
     queue = Router([queue, usd])
     print(f'Listening on 127.0.0.1:{args.port}; queue: {root}; no trading performed by receiver')
-    HTTPServer(('127.0.0.1', args.port), handler(queue, token)).serve_forever()
+    import news_calendar
+    news_stop = news_calendar.start(root.parent / 'CodexNews')
+    try:
+        HTTPServer(('127.0.0.1', args.port), handler(queue, token)).serve_forever()
+    finally:
+        news_stop.set()
 
 
 if __name__ == '__main__':

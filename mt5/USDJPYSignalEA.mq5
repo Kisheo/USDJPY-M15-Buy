@@ -1,5 +1,5 @@
 #property strict
-#property version "1.14"
+#property version "1.20"
 #include <Trade/Trade.mqh>
 
 input bool EnableTrading = false; // Place orders (true = trade, false = log signals only)
@@ -26,6 +26,9 @@ input bool RequireHedgingAccount = true;
 CTrade trade;
 int lockHandle = INVALID_HANDLE;
 string root = "CodexBridgeUSDJPY\\";
+
+#define NEWS_INCLUDE_JPY true
+#include "NewsProtection.mqh"
 
 bool CalculateLots(string symbol,bool buy,double price,double sl,double &lots,double &risk,string &error)
 {
@@ -107,6 +110,8 @@ void Process(string filename)
    { Receipt(key,"REJECTED","Hedging account required"); return; }
    if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) || !MQLInfoInteger(MQL_TRADE_ALLOWED) || !AccountInfoInteger(ACCOUNT_TRADE_ALLOWED))
    { Receipt(key,"REJECTED","Algorithmic trading unavailable"); return; }
+   string newsReason="";
+   if(NewsEntryBlocked(newsReason)) { Receipt(key,"NEWS_BLOCKED",newsReason); return; }
    MqlTick tick;
    if(!SymbolSelect(symbol,true) || !SymbolInfoTick(symbol,tick))
    { Receipt(key,"REJECTED","No broker quote"); return; }
@@ -170,6 +175,7 @@ void Process(string filename)
    trade.SetDeviationInPoints(DeviationPoints);
    trade.SetTypeFillingBySymbol(symbol);
    trade.SetAsyncMode(false);
+   if(NewsEntryBlocked(newsReason)) { Receipt(key,"NEWS_BLOCKED",newsReason); return; }
    bool submitted=false;
    if(pending)
    {
@@ -190,6 +196,8 @@ void Process(string filename)
 
 int OnInit()
 {
+   if(!NewsInputsValid()) { Print("Invalid news timing inputs"); return INIT_PARAMETERS_INCORRECT; }
+   LoadNewsCalendar();
    if(_Symbol!=BrokerSymbol || _Period!=PERIOD_M15)
    { Print("Attach to the configured USDJPY broker symbol on M15"); return INIT_PARAMETERS_INCORRECT; }
    if(UseRiskRelativeSpread && (!MathIsValidNumber(MaxSpreadR) || MaxSpreadR<=0))
@@ -210,6 +218,7 @@ int OnInit()
 }
 void OnTimer()
 {
+   ManageNews();
    string name;
    long find=FileFindFirst(root+"inbox\\*.csv",name);
    if(find==INVALID_HANDLE) return;
