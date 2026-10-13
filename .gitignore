@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.log
+*.ex5
+*.sqlite3
+*.secret
+*.token

@@ -1,0 +1,367 @@
+//@version=6
+strategy("OB Sweep + Continuation + Impulse Rejection (USDJPY M15)", overlay=true, initial_capital=10000, currency=currency.USD,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+     max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+
+// ===== USDJPY M15 warning =====
+wrongChart = syminfo.ticker != "USDJPY" or timeframe.period != "15"
+var table warnTbl = table.new(position.top_right, 1, 1, bgcolor=color.new(color.red, 10))
+if wrongChart and barstate.islast
+    table.cell(warnTbl, 0, 0, "WARNING: Designed for USDJPY M15 (current: " + syminfo.ticker + " " + timeframe.period + "). Settings are not tuned for this chart.", text_color=color.white, text_size=size.normal)
+
+// ===== Order blocks =====
+gOB        = "1. Order blocks (reversal setup)"
+useOB      = input.bool(true, "Enable OB sweep reversal signals", group=gOB)
+obDispATR  = input.float(1.0, "Displacement body (ATR x)", minval=0.1, step=0.1, group=gOB)
+obLookback = input.int(6, "Bars back to find OB candle", minval=1, maxval=30, group=gOB)
+obKeep     = input.int(5, "Nearest OBs kept per side", minval=1, maxval=30, group=gOB)
+obBodyOnly = input.bool(false, "Use candle body only (no wicks)", group=gOB)
+obMaxAge   = input.int(300, "Max OB age (bars)", minval=10, group=gOB)
+obTolATR   = input.float(0.1, "OB touch tolerance (ATR x)", minval=0, step=0.05, group=gOB)
+obShow     = input.bool(true, "Draw order blocks", group=gOB)
+
+// ===== Sweep =====
+gSig       = "2. Liquidity sweep inside OB"
+sweepType  = input.string("OB extreme", "Sweep type", options=["Swing", "OB extreme", "Either"], group=gSig)
+swingLen   = input.int(1, "Swing length", minval=1, group=gSig)
+wickPct    = input.float(10, "Min sweep wick % of range", minval=0, maxval=100, group=gSig)
+minSweepA  = input.float(0.0, "Min sweep depth (ATR x)", minval=0, step=0.05, group=gSig)
+
+// ===== Continuation pinbar =====
+gCont      = "3. Trend continuation pinbar"
+useCont    = input.bool(true, "Enable continuation signals", group=gCont)
+fastLen    = input.int(30, "Fast EMA (trend)", minval=1, group=gCont)
+slowLen    = input.int(100, "Slow EMA (trend)", minval=1, group=gCont)
+cSweepSrc  = input.string("Swing", "Liquidity swept", options=["Swing", "N-bar extreme"], group=gCont)
+cLookback  = input.int(15, "N-bar lookback (if N-bar extreme)", minval=2, group=gCont)
+cMaxBody   = input.float(75, "Max body % of range (small body)", minval=1, maxval=100, group=gCont)
+cMinWick   = input.float(40, "Min rejection wick % of range", minval=0, maxval=100, group=gCont)
+cMinRngATR = input.float(0.5, "Min candle range (ATR x)", minval=0, step=0.1, group=gCont)
+cNeedOpp   = input.bool(true, "Require opposite-color candle", group=gCont)
+cMinSlope  = input.float(0.0, "Min slow EMA slope (ATR x per 10 bars)", minval=0, step=0.05, group=gCont)
+
+// ===== Impulse rejection reversal =====
+gRej       = "3b. Impulse rejection reversal (wick / engulf)"
+useRej     = input.bool(true, "Enable impulse rejection signals", group=gRej)
+rejImpATR  = input.float(1.3, "Impulse candle body (ATR x)", minval=0.1, step=0.1, group=gRej)
+rejLook    = input.int(4, "Impulse must be within last N bars", minval=1, maxval=10, group=gRej)
+rejNM      = input.float(0.5, "No-man's-land: min distance from slow EMA (ATR x, 0=off)", minval=0, step=0.25, group=gRej)
+rejWick    = input.float(40, "Min rejection wick % of range", minval=0, maxval=100, group=gRej)
+rejWickOn  = input.bool(true, "Enable wick-rejection signals", group=gRej)
+rejEngOn   = input.bool(true, "Enable engulf signals", group=gRej)
+rejEngPct  = input.float(20, "Engulf: min cover of previous body %", minval=1, maxval=200, group=gRej)
+rejSLBars  = input.int(2, "SL beyond extreme of last N bars", minval=1, maxval=20, group=gRej)
+
+// ===== Entry / Risk =====
+gRisk      = "4. Entry / Stop / Target / Management"
+entryMode  = input.string("Next open", "Entry", options=["Next open", "Limit 50% of signal candle"], group=gRisk)
+cancelBars = input.int(5, "Cancel unfilled limit after N bars", minval=1, group=gRisk)
+slBufATR   = input.float(0.1, "SL buffer beyond signal candle (ATR x)", minval=0, step=0.05, group=gRisk)
+maxRiskA   = input.float(4.0, "Skip trade if risk > ATR x", minval=0.5, step=0.5, group=gRisk)
+rr         = input.float(1.1, "Risk:Reward", minval=0.5, step=0.25, group=gRisk)
+useBE      = input.bool(false, "Move SL to breakeven", group=gRisk)
+beR        = input.float(1.0, "Breakeven trigger (R)", minval=0.1, step=0.1, group=gRisk)
+atrLen     = input.int(14, "ATR length", minval=1, group=gRisk)
+
+// ===== Filters / limits =====
+gFlt       = "5. Filters & setup limits"
+useEMA     = input.bool(true, "Trend filter on OB reversals (EMA)", group=gFlt)
+emaLen     = input.int(100, "Filter EMA length", group=gFlt)
+useSess    = input.bool(true, "Session filter", group=gFlt)
+sess       = input.session("0330-1400", "Session (exchange tz)", group=gFlt)
+useLimit   = input.bool(true, "Limit number of setups", group=gFlt)
+limitMode  = input.string("Per day", "Count window", options=["Per day", "Per session window"], group=gFlt)
+maxSetups  = input.int(2, "Max setups per window", minval=1, group=gFlt)
+useGap     = input.bool(false, "Leave a gap between setups", group=gFlt)
+gapBars    = input.int(16, "Min bars between setups (16 = 4h on M15)", minval=1, group=gFlt)
+allowLong  = input.bool(true, "Allow longs", group=gFlt)
+allowShort = input.bool(false, "Allow shorts", group=gFlt)
+
+// ===== Visuals =====
+gViz       = "6. Visuals"
+showViz    = input.bool(true, "Draw SL / TP", group=gViz)
+showBO     = input.bool(true, "Draw BO lines", group=gViz)
+showEMA    = input.bool(false, "Plot trend EMAs", group=gViz)
+vizLen     = input.int(10, "Drawing length (bars)", minval=2, group=gViz)
+
+// ===== MT5 bridge (same webhook URL as XAUUSD) =====
+gBridge = "7. MT5 bridge"
+mt5Alerts = input.bool(false, "Enable MT5 JSON alerts", group=gBridge)
+if mt5Alerts and (wrongChart or entryMode != "Next open" or useBE)
+    runtime.error("MT5 bridge requires USDJPY M15, Next open entry, and breakeven OFF.")
+
+f_mt5(side, e, sl, tp) =>
+    if mt5Alerts and barstate.isrealtime and barstate.isconfirmed and not wrongChart
+        string signalId = "usdjpy-m15-" + str.tostring(time_close) + "-" + side
+        string msg = '{"version":1,"event":"entry","route":"usdjpy-m15","symbol":"USDJPY","timeframe":"15","id":"' + signalId + '","time_ms":' + str.tostring(time_close) + ',"side":"' + side + '","entry":' + str.tostring(e, format.mintick) + ',"sl":' + str.tostring(sl, format.mintick) + ',"tp":' + str.tostring(tp, format.mintick) + '}'
+        alert(msg, alert.freq_once_per_bar_close)
+
+atr      = ta.atr(atrLen)
+ema      = ta.ema(close, emaLen)
+emaF     = ta.ema(close, fastLen)
+emaS     = ta.ema(close, slowLen)
+inSess   = not useSess or not na(time(timeframe.period, sess))
+inSessRaw = not na(time(timeframe.period, sess))
+
+plot(showEMA ? emaF : na, "Fast EMA", color.new(color.aqua, 20))
+plot(showEMA ? emaS : na, "Slow EMA", color.new(color.orange, 20))
+
+// ---------- Swings ----------
+ph = ta.pivothigh(high, swingLen, swingLen)
+pl = ta.pivotlow(low, swingLen, swingLen)
+var float lastHigh = na
+var float lastLow  = na
+if not na(ph)
+    lastHigh := ph
+if not na(pl)
+    lastLow := pl
+
+// ---------- Setup counter ----------
+var int setupCount = 0
+bool newDay  = dayofmonth != dayofmonth[1]
+bool newSess = inSessRaw and not inSessRaw[1]
+if limitMode == "Per day" ? newDay : newSess
+    setupCount := 0
+var int lastSetupBar = -100000
+bool gapOk = not useGap or bar_index - lastSetupBar > gapBars
+bool limitOk = (not useLimit or setupCount < maxSetups) and gapOk
+
+// ---------- Order blocks ----------
+var array<float> bullTopA = array.new_float()
+var array<float> bullBotA = array.new_float()
+var array<int>   bullBarA = array.new_int()
+var array<box>   bullBoxA = array.new<box>()
+var array<float> bearTopA = array.new_float()
+var array<float> bearBotA = array.new_float()
+var array<int>   bearBarA = array.new_int()
+var array<box>   bearBoxA = array.new<box>()
+
+f_remove(topA, botA, barA, boxA, idx) =>
+    array.remove(topA, idx)
+    array.remove(botA, idx)
+    array.remove(barA, idx)
+    box.delete(array.remove(boxA, idx))
+
+f_manage(topA, botA, barA, boxA, isBull) =>
+    int n = array.size(topA)
+    if n > 0
+        for k = 0 to n - 1
+            int i = n - 1 - k
+            bool dead = isBull ? close < array.get(botA, i) : close > array.get(topA, i)
+            if dead or bar_index - array.get(barA, i) > obMaxAge
+                f_remove(topA, botA, barA, boxA, i)
+            else
+                box.set_right(array.get(boxA, i), bar_index)
+    while array.size(topA) > obKeep
+        f_remove(topA, botA, barA, boxA, 0)
+
+dispBody = math.abs(close - open)
+bullDisp = close > open and dispBody >= atr * obDispATR and close > high[1]
+bearDisp = close < open and dispBody >= atr * obDispATR and close < low[1]
+
+f_add(topA, botA, barA, boxA, t, b, col) =>
+    bool dup = false
+    int n = array.size(topA)
+    if n > 0
+        for i = 0 to n - 1
+            if array.get(topA, i) == t and array.get(botA, i) == b
+                dup := true
+    if not dup
+        array.push(topA, t)
+        array.push(botA, b)
+        array.push(barA, bar_index)
+        array.push(boxA, box.new(bar_index, t, bar_index + 1, b, border_color=col, bgcolor=obShow ? color.new(col, 88) : na, border_width=obShow ? 1 : 0))
+
+if bullDisp and not bullDisp[1]
+    for i = 1 to obLookback
+        if close[i] < open[i]
+            float t = obBodyOnly ? open[i] : high[i]
+            float b = obBodyOnly ? close[i] : low[i]
+            f_add(bullTopA, bullBotA, bullBarA, bullBoxA, t, b, color.teal)
+            break
+if bearDisp and not bearDisp[1]
+    for i = 1 to obLookback
+        if close[i] > open[i]
+            float t = obBodyOnly ? close[i] : high[i]
+            float b = obBodyOnly ? open[i] : low[i]
+            f_add(bearTopA, bearBotA, bearBarA, bearBoxA, t, b, color.red)
+            break
+
+f_manage(bullTopA, bullBotA, bullBarA, bullBoxA, true)
+f_manage(bearTopA, bearBotA, bearBarA, bearBoxA, false)
+
+// ---------- OB sweep reversal ----------
+f_obSweep(topA, botA, isBull, swing, tol) =>
+    bool hit = false
+    int n = array.size(topA)
+    if n > 0
+        for i = 0 to n - 1
+            float t = array.get(topA, i)
+            float b = array.get(botA, i)
+            bool touch = isBull ? (low <= t + tol and high >= b and close > b) : (high >= b - tol and low <= t and close < t)
+            bool swept = false
+            if touch
+                bool swingSw = not na(swing) and (isBull ? (low < swing - atr * minSweepA and close > swing) : (high > swing + atr * minSweepA and close < swing))
+                bool obSw    = isBull ? (low < b - atr * minSweepA and close > b) : (high > t + atr * minSweepA and close < t)
+                swept := sweepType == "Swing" ? swingSw : sweepType == "OB extreme" ? obSw : (swingSw or obSw)
+            if touch and swept
+                hit := true
+    hit
+
+rng       = high - low
+body      = math.abs(close - open)
+lowerWick = math.min(open, close) - low
+upperWick = high - math.max(open, close)
+tolOB     = atr * obTolATR
+
+obBuy  = useOB and rng > 0 and lowerWick / rng * 100 >= wickPct and (not useEMA or close > ema) and f_obSweep(bullTopA, bullBotA, true, lastLow, tolOB)
+obSell = useOB and rng > 0 and upperWick / rng * 100 >= wickPct and (not useEMA or close < ema) and f_obSweep(bearTopA, bearBotA, false, lastHigh, tolOB)
+
+// ---------- Trend continuation pinbar ----------
+slopeOk  = math.abs(emaS - emaS[10]) >= atr * cMinSlope
+upTrend  = emaF > emaS and close > emaS and emaS > emaS[10] and slopeOk
+dnTrend  = emaF < emaS and close < emaS and emaS < emaS[10] and slopeOk
+
+float swLow  = cSweepSrc == "Swing" ? lastLow  : ta.lowest(low, cLookback)[1]
+float swHigh = cSweepSrc == "Swing" ? lastHigh : ta.highest(high, cLookback)[1]
+
+smallBody = rng > 0 and body / rng * 100 <= cMaxBody and rng >= atr * cMinRngATR
+contBuy  = useCont and upTrend and smallBody and (not cNeedOpp or close < open) and not na(swLow) and low < swLow - atr * minSweepA and close > swLow and lowerWick / rng * 100 >= cMinWick
+contSell = useCont and dnTrend and smallBody and (not cNeedOpp or close > open) and not na(swHigh) and high > swHigh + atr * minSweepA and close < swHigh and upperWick / rng * 100 >= cMinWick
+
+// ---------- Impulse rejection reversal ----------
+// Impulse candle: big body; optionally closes far from slow EMA ("no-man's-land")
+impBear = close < open and body >= atr * rejImpATR and (rejNM == 0 or emaS - close >= atr * rejNM)
+impBull = close > open and body >= atr * rejImpATR and (rejNM == 0 or close - emaS >= atr * rejNM)
+recentBear = nz(ta.barssince(impBear)[1], 999) < rejLook
+recentBull = nz(ta.barssince(impBull)[1], 999) < rejLook
+
+pLowW  = rng[1] > 0 ? (math.min(open[1], close[1]) - low[1]) / rng[1] * 100 : 0.0
+pUpW   = rng[1] > 0 ? (high[1] - math.max(open[1], close[1])) / rng[1] * 100 : 0.0
+curLowW = rng > 0 ? lowerWick / rng * 100 : 0.0
+curUpW  = rng > 0 ? upperWick / rng * 100 : 0.0
+
+// Bullish: sell impulse, then (a) red wick candle followed by bullish close, (b) green wick candle closes bullish itself, (c) bullish engulf
+wickBuyNext = rejWickOn and close > open and close[1] < open[1] and pLowW >= rejWick and (impBear[1] or recentBear)
+wickBuySelf = rejWickOn and close > open and curLowW >= rejWick and recentBear
+engBuy      = rejEngOn and close > open and close[1] < open[1] and body[1] > 0 and (close - close[1]) >= body[1] * rejEngPct / 100 and (impBear[1] or recentBear)
+rejBuy      = useRej and (wickBuyNext or wickBuySelf or engBuy)
+
+wickSellNext = rejWickOn and close < open and close[1] > open[1] and pUpW >= rejWick and (impBull[1] or recentBull)
+wickSellSelf = rejWickOn and close < open and curUpW >= rejWick and recentBull
+engSell      = rejEngOn and close < open and close[1] > open[1] and body[1] > 0 and (close[1] - close) >= body[1] * rejEngPct / 100 and (impBull[1] or recentBull)
+rejSell      = useRej and (wickSellNext or wickSellSelf or engSell)
+
+rejLowSL  = ta.lowest(low, rejSLBars)
+rejHighSL = ta.highest(high, rejSLBars)
+
+baseOk  = inSess and limitOk and barstate.isconfirmed
+buySig  = baseOk and allowLong and (obBuy or contBuy or rejBuy)
+sellSig = baseOk and allowShort and (obSell or contSell or rejSell)
+slBase  = buySig and rejBuy and not (obBuy or contBuy)
+slBaseS = sellSig and rejSell and not (obSell or contSell)
+
+
+
+// ---------- Position box drawing ----------
+var box posTp = na
+var box posSl = na
+var line posEntry = na
+// ---------- Orders ----------
+var int   pDir  = 0
+var float pSL   = na
+var float pTP0  = na
+var int   pBar  = na
+var bool  exitSet = true
+
+f_riskOk(e, sl) => math.abs(e - sl) > 0 and math.abs(e - sl) <= atr * maxRiskA
+
+if strategy.position_size == 0 and pDir == 0
+    if buySig
+        float sl = (slBase ? rejLowSL : low) - atr * slBufATR
+        float e  = entryMode == "Next open" ? close : (high + low) / 2
+        if f_riskOk(e, sl) and e > sl
+            if entryMode == "Next open"
+                strategy.entry("L", strategy.long)
+            else
+                strategy.entry("L", strategy.long, limit=e)
+            f_mt5("BUY", e, sl, e + rr * (e - sl))
+            pDir := 1
+            strategy.exit("LX", "L", stop=sl, limit=e + rr * (e - sl))
+            pSL := sl
+            pBar := bar_index
+            exitSet := false
+            setupCount += 1
+            lastSetupBar := bar_index
+            if showViz
+                int rr_ = bar_index + vizLen
+                float tpL = e + rr * (e - sl)
+                posTp := box.new(bar_index, math.max(tpL, e), rr_, math.min(tpL, e), border_color=color.new(color.green, 30), bgcolor=color.new(color.green, 80))
+                posSl := box.new(bar_index, math.max(sl, e), rr_, math.min(sl, e), border_color=color.new(color.red, 30), bgcolor=color.new(color.red, 80))
+                posEntry := line.new(bar_index, e, rr_, e, color=color.gray)
+    else if sellSig
+        float sl = (slBaseS ? rejHighSL : high) + atr * slBufATR
+        float e  = entryMode == "Next open" ? close : (high + low) / 2
+        if f_riskOk(e, sl) and e < sl
+            if entryMode == "Next open"
+                strategy.entry("S", strategy.short)
+            else
+                strategy.entry("S", strategy.short, limit=e)
+            f_mt5("SELL", e, sl, e - rr * (sl - e))
+            pDir := -1
+            strategy.exit("SX", "S", stop=sl, limit=e - rr * (sl - e))
+            pSL := sl
+            pBar := bar_index
+            exitSet := false
+            setupCount += 1
+            lastSetupBar := bar_index
+            if showViz
+                int rr_ = bar_index + vizLen
+                float tpL = e - rr * (sl - e)
+                posTp := box.new(bar_index, math.max(tpL, e), rr_, math.min(tpL, e), border_color=color.new(color.green, 30), bgcolor=color.new(color.green, 80))
+                posSl := box.new(bar_index, math.max(sl, e), rr_, math.min(sl, e), border_color=color.new(color.red, 30), bgcolor=color.new(color.red, 80))
+                posEntry := line.new(bar_index, e, rr_, e, color=color.gray)
+
+// Once filled, attach SL/TP from the real fill price
+if strategy.position_size > 0 and pDir == 1
+    float ent = strategy.position_avg_price
+    float r   = ent - pSL
+    if r > 0
+        float stp = pSL
+        if useBE and high >= ent + beR * r
+            stp := ent
+        strategy.exit("LX", "L", stop=stp, limit=ent + rr * r)
+if strategy.position_size < 0 and pDir == -1
+    float ent = strategy.position_avg_price
+    float r   = pSL - ent
+    if r > 0
+        float stp = pSL
+        if useBE and low <= ent - beR * r
+            stp := ent
+        strategy.exit("SX", "S", stop=stp, limit=ent - rr * r)
+
+// Reset after the trade closes or a limit order goes stale
+if strategy.position_size == 0 and pDir != 0 and bar_index > pBar
+    bool pendingOrder = false
+    if entryMode != "Next open" and bar_index - pBar < cancelBars and strategy.opentrades == 0
+        pendingOrder := true
+    if not pendingOrder
+        strategy.cancel("L")
+        strategy.cancel("S")
+        pDir := 0
+
+if pDir != 0 and showViz and not na(posTp)
+    box.set_right(posTp, bar_index + 1)
+    box.set_right(posSl, bar_index + 1)
+    line.set_x2(posEntry, bar_index + 1)
+// ---------- BO lines ----------
+if showBO
+    if not na(lastHigh) and close > lastHigh and close[1] <= lastHigh
+        line.new(bar_index - swingLen, lastHigh, bar_index, lastHigh, color=color.teal, width=2)
+        label.new(bar_index, lastHigh, "BO", style=label.style_none, textcolor=color.teal)
+    if not na(lastLow) and close < lastLow and close[1] >= lastLow
+        line.new(bar_index - swingLen, lastLow, bar_index, lastLow, color=color.red, width=2)
+        label.new(bar_index, lastLow, "BO", style=label.style_none, textcolor=color.red)
+
+alertcondition(buySig,  "BUY signal",  "BUY on {{ticker}}")
+alertcondition(sellSig, "SELL signal", "SELL on {{ticker}}")
