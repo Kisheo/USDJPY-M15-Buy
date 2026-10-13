@@ -241,8 +241,10 @@ pUpW   = rng[1] > 0 ? (high[1] - math.max(open[1], close[1])) / rng[1] * 100 : 0
 curLowW = rng > 0 ? lowerWick / rng * 100 : 0.0
 curUpW  = rng > 0 ? upperWick / rng * 100 : 0.0
 
-// Bullish: sell impulse, then (a) red wick candle followed by bullish close, (b) green wick candle closes bullish itself, (c) bullish engulf
-wickBuyNext = rejWickOn and close > open and close[1] < open[1] and pLowW >= rejWick and (impBear[1] or recentBear)
+// Buy confirmation: immediately preceding red impulse has a qualifying lower wick.
+// Current candle must close green; no engulf/body-break or higher-low requirement.
+buyConfirmation = impBear[1] and pLowW >= rejWick and close > open
+wickBuyNext = rejWickOn and buyConfirmation
 wickBuySelf = rejWickOn and close > open and curLowW >= rejWick and recentBear
 engBuy      = rejEngOn and close > open and close[1] < open[1] and body[1] > 0 and (close - close[1]) >= body[1] * rejEngPct / 100 and (impBear[1] or recentBear)
 rejBuy      = useRej and (wickBuyNext or wickBuySelf or engBuy)
@@ -256,7 +258,8 @@ rejLowSL  = ta.lowest(low, rejSLBars)
 rejHighSL = ta.highest(high, rejSLBars)
 
 baseOk  = inSess and limitOk and barstate.isconfirmed
-buySig  = baseOk and allowLong and (obBuy or contBuy or rejBuy)
+// All buy paths share confirmation so OB/continuation cannot enter on the red candle.
+buySig  = baseOk and allowLong and buyConfirmation and (obBuy or contBuy or rejBuy)
 sellSig = baseOk and allowShort and (obSell or contSell or rejSell)
 slBase  = buySig and rejBuy and not (obBuy or contBuy)
 slBaseS = sellSig and rejSell and not (obSell or contSell)
@@ -278,7 +281,7 @@ f_riskOk(e, sl) => math.abs(e - sl) > 0 and math.abs(e - sl) <= atr * maxRiskA
 
 if strategy.position_size == 0 and pDir == 0
     if buySig
-        float sl = (slBase ? rejLowSL : low) - atr * slBufATR
+        float sl = math.min(slBase ? rejLowSL : low, math.min(low, low[1])) - atr * slBufATR
         float e  = entryMode == "Next open" ? close : (high + low) / 2
         if f_riskOk(e, sl) and e > sl
             if entryMode == "Next open"

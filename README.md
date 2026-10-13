@@ -1,6 +1,6 @@
 # USDJPY M15 → existing XAUUSD tunnel → separate MT5 EA
 
-`USDJPY_M15.pine` is based on the local `rejection_reversal_v5.pine`. Signal detection, strategy inputs, session, drawings and simulated orders are preserved. Longs remain enabled and shorts disabled by default.
+`USDJPY_M15.pine` is based on the local `rejection_reversal_v5.pine`. The v5 strategy is retained with the buy-confirmation correction described below; existing input defaults, session and drawings remain. Longs remain enabled and shorts disabled by default.
 
 ## TradingView
 
@@ -29,6 +29,12 @@ No secrets are stored in this repository. The receiver and both EAs must run on 
 
 ## Validation
 
-MetaEditor: zero errors, zero warnings. Seven Python tests cover HTTP authentication, validation, duplicates, conflicts, recovery, receipt replay prevention and route isolation, including identical IDs on different routes. Tests use temporary queues and place no trades. Pine compilation in TradingView and an actual TradingView-to-MT5 fill remain unverified.
+MetaEditor: zero errors, zero warnings. Twelve Python tests cover HTTP authentication, validation, duplicates, conflicts, recovery, receipt replay prevention and route isolation, including identical IDs on different routes. Tests use temporary queues and place no trades. Pine compilation in TradingView and an actual TradingView-to-MT5 fill remain unverified.
 
 Installed on this PC: the active receiver in the Codex app-cache runtime was updated and restarted; localhost health and the USDJPY timeframe rejection were verified. The existing tunnel process was left running. USDJPYSignalEA source and compiled binary are installed under the configured terminal's Experts/CodexBridge directory. The EA has not been attached or enabled by this update. The original receiver was backed up in each updated runtime directory.
+
+## Buy confirmation correction
+
+Every buy requires the immediately previous candle to be a red impulse with a lower wick meeting `rejWick`, followed by the current candle closing green. Engulfing, breaking the prior body high and a higher low are not required. Existing impulse criteria (`rejImpATR` and `rejNM`) and the 40% default minimum wick still apply. OB and continuation paths cannot bypass this gate. A red or doji next candle fails confirmation; an older impulse cannot qualify this two-candle pattern. Existing enabled setup families, session, daily limits, position and risk checks still apply. Shorts are unchanged.
+
+The signal and webhook occur at the green close. Default Next open simulation fills on the following candle. Buy SL covers both candles' lows plus the existing ATR buffer (and any lower rejection lookback low already selected). Existing 1.1R target calculation remains. Updated both the repository Pine and local rejection_reversal_v5.pine. Recreate the TradingView alert after replacing the script. Python regression checks pass; TradingView compilation/backtest remain to be run.
