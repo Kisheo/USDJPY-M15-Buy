@@ -3,7 +3,7 @@ input bool EnableNewsProtection = true;
 input int MediumNewsLeadMinutes = 15;
 input int HighNewsLeadMinutes = 30;
 input int NewsResumeMinutes = 15;
-input int NewsMaxCacheAgeMinutes = 360;
+input int NewsMaxCacheAgeMinutes = 720;
 input bool BlockEntriesWithoutCalendar = true;
 
 long newsTimes[];

@@ -1,6 +1,6 @@
 # USDJPY M15 → existing XAUUSD tunnel → separate MT5 EA
 
-Both signal EAs now include Forex Factory news protection (v1.20). See [NEWS_PROTECTION.md](NEWS_PROTECTION.md) for timing, all-symbol trade scope, activation and calendar-failure behavior.
+Both signal EAs now include Forex Factory news protection (v1.21). See [NEWS_PROTECTION.md](NEWS_PROTECTION.md) for timing, all-symbol trade scope, activation and calendar-failure behavior.
 
 `USDJPY_M15.pine` is based on the local `rejection_reversal_v5.pine`. Signal detection, strategy inputs, session, drawings and simulated orders are preserved. Longs remain enabled and shorts disabled by default.
 

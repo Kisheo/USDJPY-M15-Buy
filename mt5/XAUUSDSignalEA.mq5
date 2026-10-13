@@ -1,5 +1,5 @@
 #property strict
-#property version "1.20"
+#property version "1.21"
 #include <Trade/Trade.mqh>
 
 input bool EnableTrading = false; // Place orders (true = trade, false = log signals only)

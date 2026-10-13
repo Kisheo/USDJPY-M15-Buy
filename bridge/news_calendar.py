@@ -10,7 +10,7 @@ import time
 import urllib.request
 
 URL = 'https://nfs.faireconomy.media/ff_calendar_thisweek.json'
-REFRESH = 3600
+REFRESH = 12 * 60 * 60
 
 
 def parse_calendar(payload, now):
@@ -61,19 +61,40 @@ def publish(path, payload, fetched):
     return len(events)
 
 
+def refresh_delay(root, now):
+    """Successful refresh controls normal cadence; failures back off for one hour."""
+    root = Path(root)
+    try:
+        saved = json.loads((root/'calendar.json').read_text())
+        fetched = float(saved['fetched'])
+        age = now-fetched
+        if 0 <= age < REFRESH:
+            parse_calendar(saved['events'], now)
+            # Restore a missing CSV without making an HTTP request or changing freshness.
+            if not (root/'calendar.csv').exists():
+                publish(root/'calendar.csv', saved['events'], fetched)
+            return REFRESH-age
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    try:
+        attempted = float((root/'last-attempt.txt').read_text())
+        age = now-attempted
+        if 0 <= age < 3600:
+            return 3600-age
+    except (OSError, ValueError):
+        pass
+    return 0
+
+
 def run(root, stop):
     root = Path(root)
     cache = root / 'calendar.json'
     last_attempt = root / 'last-attempt.txt'
     while not stop.is_set():
         now = time.time()
-        try:
-            attempted = float(last_attempt.read_text())
-        except (OSError, ValueError):
-            attempted = 0
-        # Persist attempts to avoid rate-limit bursts on receiver restarts.
-        if -REFRESH < now-attempted < REFRESH:
-            stop.wait(min(60, max(1, REFRESH-(now-attempted))))
+        delay = refresh_delay(root, now)
+        if delay > 0:
+            stop.wait(min(60, delay))
             continue
         try:
             atomic_write(last_attempt, str(now))

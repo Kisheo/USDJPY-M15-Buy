@@ -77,4 +77,33 @@ class NewsWindowTests(unittest.TestCase):
                 skip=eval(expr,{'__builtins__':{}},dict(currency=currency,NEWS_INCLUDE_JPY=jpy))
                 self.assertEqual(not skip,currency in ('USD','All') or (jpy and currency=='JPY'))
 
+
+class RefreshTests(unittest.TestCase):
+    def test_restart_uses_success_and_exact_boundary(self):
+        import json
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            (root/'calendar.json').write_text(json.dumps(dict(fetched=NOW,events=[event()])))
+            (root/'last-attempt.txt').write_text(str(NOW))
+            self.assertEqual(news.refresh_delay(root,NOW+43199),1)
+            self.assertTrue((root/'calendar.csv').exists())
+            self.assertEqual(news.refresh_delay(root,NOW+43200),0)
+            self.assertEqual(news.refresh_delay(root,NOW+50000),0)
+            self.assertTrue((root/'calendar.csv').read_text().startswith(f'FFNEWS1,{NOW},'))
+
+    def test_failed_attempt_does_not_count_as_success(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            (root/'last-attempt.txt').write_text(str(NOW))
+            self.assertEqual(news.refresh_delay(root,NOW+100),3500)
+            self.assertEqual(news.refresh_delay(root,NOW+3600),0)
+
+    def test_missing_cache_and_future_clock(self):
+        import json
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            self.assertEqual(news.refresh_delay(root,NOW),0)
+            (root/'calendar.json').write_text(json.dumps(dict(fetched=NOW+500,events=[event()])))
+            self.assertEqual(news.refresh_delay(root,NOW),0)
+
 if __name__=='__main__':unittest.main()
